@@ -1,61 +1,100 @@
-
 import streamlit as st
-import sqlite3
 import pandas as pd
+from io import BytesIO
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet
 
-st.set_page_config(page_title="Eissa Tax", layout="wide")
+st.set_page_config(page_title="Eissa Tax", page_icon="💰", layout="centered")
 
-def init_db():
-    conn=sqlite3.connect("eissatax.db")
-    cur=conn.cursor()
-    cur.execute('''CREATE TABLE IF NOT EXISTS salaries(
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    month TEXT,
-    gross REAL,
-    basic REAL,
-    special REAL,
-    tax REAL,
-    net REAL)''')
-    conn.commit()
-    conn.close()
+# ---------------- UI ----------------
+st.markdown("""
+    <style>
+    .main {background-color: #f7f9fc;}
+    h1 {color: #1f4e79; text-align: center;}
+    </style>
+""", unsafe_allow_html=True)
 
-def calc_tax(gross,basic,special):
-    total=basic+special
-    monthly=gross-total
-    annual=monthly*12
-    taxable=max(annual-20000,0)
-    tax=(max(min(taxable,55000)-40000,0)*0.10 +
-         max(min(taxable,70000)-55000,0)*0.15 +
-         max(min(taxable,200000)-70000,0)*0.20 +
-         max(min(taxable,400000)-200000,0)*0.225 +
-         max(taxable-400000,0)*0.25)
-    return tax/12, gross-total-tax/12
+st.title("💰 Eissa Tax Calculator")
+st.write("حساب ضريبة كسب العمل بطريقة بسيطة واحترافية")
 
-init_db()
+# ---------------- INPUT ----------------
+salary = st.number_input("💵 الراتب الشهري", min_value=0.0, step=500.0)
+insurance = st.number_input("🛡️ التأمينات الشهرية", min_value=0.0, step=100.0)
 
-st.title("Eissa Tax")
+annual_salary = salary * 12
+net_income = annual_salary - (insurance * 12)
 
-tab1,tab2=st.tabs(["الحاسبة","السجل"])
+# ---------------- TAX LOGIC ----------------
+def calculate_tax(income):
+    if income <= 60000:
+        return 0
+    elif income <= 200000:
+        return (income - 60000) * 0.10
+    elif income <= 400000:
+        return 14000 + (income - 200000) * 0.15
+    else:
+        return 44000 + (income - 400000) * 0.20
 
-with tab1:
-    gross=st.number_input("إجمالي الاستحقاقات",0.0)
-    basic=st.number_input("التأمين الأساسي",0.0)
-    special=st.number_input("التأمينات الخاصة",0.0)
-    month=st.text_input("الشهر")
+tax = calculate_tax(net_income)
+monthly_tax = tax / 12
+net_monthly = salary - monthly_tax - insurance
 
-    if st.button("احسب الضريبة"):
-        tax,net=calc_tax(gross,basic,special)
-        st.success(f"ضريبة كسب العمل: {tax:.2f} جنيه")
-        st.info(f"صافي المرتب: {net:.2f} جنيه")
+# ---------------- RESULT ----------------
+st.subheader("📊 النتائج")
 
-        conn=sqlite3.connect("eissatax.db")
-        conn.execute("INSERT INTO salaries(month,gross,basic,special,tax,net) VALUES(?,?,?,?,?,?)",
-                     (month,gross,basic,special,tax,net))
-        conn.commit()
-        conn.close()
+col1, col2, col3 = st.columns(3)
+col1.metric("صافي سنوي", f"{net_income:,.0f} EGP")
+col2.metric("الضريبة السنوية", f"{tax:,.0f} EGP")
+col3.metric("ضريبة شهرية", f"{monthly_tax:,.0f} EGP")
 
-with tab2:
-    conn=sqlite3.connect("eissatax.db")
-    df=pd.read_sql_query("SELECT * FROM salaries ORDER BY id DESC",conn)
-    conn.close()
-    st.dataframe(df,use_container_width=True)
+st.success(f"💰 صافي المرتب الشهري بعد الضريبة: {net_monthly:,.2f} EGP")
+
+# ---------------- EXPORT EXCEL ----------------
+df = pd.DataFrame({
+    "البيان": ["صافي سنوي", "الضريبة السنوية", "ضريبة شهرية", "صافي شهري"],
+    "القيمة": [net_income, tax, monthly_tax, net_monthly]
+})
+
+excel_buffer = BytesIO()
+df.to_excel(excel_buffer, index=False, engine="openpyxl")
+
+st.download_button(
+    "📥 تحميل Excel",
+    data=excel_buffer.getvalue(),
+    file_name="tax_report.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
+
+# ---------------- EXPORT PDF ----------------
+def create_pdf(data):
+    buffer = BytesIO()
+    doc = SimpleDocTemplate(buffer)
+    styles = getSampleStyleSheet()
+    content = []
+
+    content.append(Paragraph("Eissa Tax Report", styles['Title']))
+    content.append(Spacer(1, 12))
+
+    for k, v in data.items():
+        content.append(Paragraph(f"{k}: {v}", styles['Normal']))
+        content.append(Spacer(1, 8))
+
+    doc.build(content)
+    buffer.seek(0)
+    return buffer
+
+pdf_data = {
+    "صافي سنوي": f"{net_income:,.0f}",
+    "ضريبة سنوية": f"{tax:,.0f}",
+    "ضريبة شهرية": f"{monthly_tax:,.0f}",
+    "صافي شهري": f"{net_monthly:,.2f}"
+}
+
+pdf_buffer = create_pdf(pdf_data)
+
+st.download_button(
+    "📄 تحميل PDF",
+    data=pdf_buffer,
+    file_name="tax_report.pdf",
+    mime="application/pdf"
+)
